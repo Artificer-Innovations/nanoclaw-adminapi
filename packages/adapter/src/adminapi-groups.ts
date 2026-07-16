@@ -7,7 +7,6 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dispatch } from './cli/dispatch.js';
-import type { ErrorCode } from './cli/frame.js';
 import { GROUPS_DIR } from './config.js';
 import { getAgentGroup, getAgentGroupByFolder } from './db/agent-groups.js';
 import { getContainerConfig } from './db/container-configs.js';
@@ -15,7 +14,7 @@ import { initGroupFilesystem } from './group-init.js';
 import { AdminHttpError, type CreateResult, type GroupRecord, type GroupsBackend } from './adminapi-http.js';
 
 /** Map an ncl dispatch error code to an HTTP-facing status/code. */
-function mapDispatchError(code: ErrorCode, message: string): Error {
+function mapDispatchError(code: string, message: string): Error {
   switch (code) {
     case 'not-found':
       return new AdminHttpError(404, 'not_found', message);
