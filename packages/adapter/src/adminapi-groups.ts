@@ -56,15 +56,16 @@ function configSummary(agentGroupId: string): Record<string, unknown> | null {
   };
 }
 
-function presentGroup(group: {
+/** Narrow shape shared by AgentGroup rows and dispatch list/get payloads. */
+type GroupLike = {
   id: string;
   name: string;
   folder: string;
   created_at?: string;
-  [key: string]: unknown;
-}, warnings: string[] = []): GroupRecord {
+};
+
+function presentGroup(group: GroupLike, warnings: string[] = []): GroupRecord {
   return {
-    ...group,
     id: group.id,
     name: group.name,
     folder: group.folder,
@@ -155,7 +156,7 @@ export function createHostGroupsBackend(): GroupsBackend {
       initGroupFilesystem(group as Parameters<typeof initGroupFilesystem>[0]);
       const refreshed = getAgentGroup(group.id) ?? group;
       const warnings = staleData ? ['folder_reused_with_existing_data'] : [];
-      return { group: presentGroup(refreshed as typeof created, warnings), created: true };
+      return { group: presentGroup(refreshed, warnings), created: true };
     },
 
     async update(id, body) {
