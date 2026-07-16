@@ -10,22 +10,35 @@ import { log } from './log.js';
 
 let server: http.Server | null = null;
 
+/** Drop stalled/slow clients so they can't hold connections open forever. */
+const REQUEST_TIMEOUT_MS = 30_000;
+
 export async function startAdminApiServer(config: AdminApiConfig): Promise<http.Server> {
   if (server) return server;
 
   const backend = createHostGroupsBackend();
-  server = http.createServer((req, res) => {
+  const candidate = http.createServer((req, res) => {
     void handleAdminRequest(req, res, {
       token: config.token,
       basePath: config.basePath,
       backend,
+      healthPublic: config.healthPublic,
     });
   });
+  candidate.requestTimeout = REQUEST_TIMEOUT_MS;
+  candidate.timeout = REQUEST_TIMEOUT_MS;
 
+  // Only publish the module-level singleton after listen succeeds. If listen
+  // rejects (e.g. EADDRINUSE) `server` stays null so a later call retries
+  // instead of returning a dead, non-listening server.
   await new Promise<void>((resolve, reject) => {
-    server!.once('error', reject);
-    server!.listen(config.port, config.bind, () => resolve());
+    candidate.once('error', reject);
+    candidate.listen(config.port, config.bind, () => {
+      candidate.removeListener('error', reject);
+      resolve();
+    });
   });
+  server = candidate;
 
   log.info('Admin API listening', {
     bind: config.bind,

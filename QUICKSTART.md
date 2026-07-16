@@ -10,7 +10,24 @@ pnpm add nanoclaw-adminapi
 pnpm exec nanoclaw-adminapi install
 ```
 
-## 2. Build & restart
+Install scaffolds `.env` with a random `ADMINAPI_TOKEN` and, deliberately, `ADMINAPI_ENABLED=false` — the API is **off until you turn it on** (fail closed).
+
+## 2. Enable (after reviewing exposure)
+
+The install ships disabled so you can review network exposure and the generated token first. When ready:
+
+```bash
+# in your fork's .env
+ADMINAPI_ENABLED=true
+```
+
+Optionally, for reverse-proxy/LB liveness probes that shouldn't carry the root token:
+
+```bash
+ADMINAPI_HEALTH_PUBLIC=true
+```
+
+## 3. Build & restart
 
 ```bash
 pnpm run build
@@ -18,7 +35,7 @@ pnpm run build
 pnpm exec nanoclaw-adminapi verify
 ```
 
-## 3. Smoke test
+## 4. Smoke test
 
 ```bash
 set -a && source .env && set +a

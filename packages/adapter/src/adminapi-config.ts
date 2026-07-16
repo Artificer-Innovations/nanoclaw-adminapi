@@ -10,6 +10,8 @@ export interface AdminApiConfig {
   bind: string;
   port: number;
   basePath: string;
+  /** Serve GET /health without a token (for LB/proxy liveness probes). */
+  healthPublic: boolean;
 }
 
 function truthy(value: string | undefined): boolean {
@@ -49,6 +51,7 @@ export function resolveAdminApiConfig(
     bind,
     port: Number.isFinite(port) && port > 0 ? port : DEFAULT_PORT,
     basePath,
+    healthPublic: truthy(get('ADMINAPI_HEALTH_PUBLIC')),
   };
 }
 

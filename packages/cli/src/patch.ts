@@ -94,8 +94,11 @@ export function scaffoldEnv(nanoclawRoot: string): { created: string[]; skipped:
   const lines = fs.existsSync(envPath) ? fs.readFileSync(envPath, 'utf8').split('\n') : [];
   const existing = new Set(lines.map((l) => l.split('=')[0]?.trim()).filter(Boolean));
 
+  // Fail closed: installing the package must not open a root-equivalent admin
+  // surface on its own. Operator flips ADMINAPI_ENABLED=true after reviewing
+  // network exposure and the generated token (QUICKSTART covers this).
   const additions: Record<string, string> = {
-    ADMINAPI_ENABLED: 'true',
+    ADMINAPI_ENABLED: 'false',
     ADMINAPI_PORT: '3210',
     ADMINAPI_TOKEN: randomBytes(16).toString('hex'),
   };

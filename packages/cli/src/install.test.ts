@@ -91,6 +91,10 @@ describe('install / uninstall / verify', () => {
     expect(fs.existsSync(path.join(host, '.claude/skills/add-adminapi/SKILL.md'))).toBe(true);
     expect(result.env.created).toContain('ADMINAPI_TOKEN');
 
+    // Fail closed: install must not enable the API on its own.
+    const envAfter = fs.readFileSync(path.join(host, '.env'), 'utf8');
+    expect(envAfter).toContain('ADMINAPI_ENABLED=false');
+
     const verify = runVerify(host);
     expect(verify.ok).toBe(true);
 

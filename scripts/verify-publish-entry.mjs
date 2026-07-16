@@ -12,9 +12,14 @@ if (!fs.existsSync(bin)) {
   process.exit(1);
 }
 
-const resources = path.join(root, 'skills/add-adminapi/resources/adminapi-boot.ts');
-if (!fs.existsSync(resources)) {
-  console.error('Missing skills/add-adminapi/resources — sync-adapter-resources failed');
+const resourcesDir = path.join(root, 'skills/add-adminapi/resources');
+if (!fs.existsSync(resourcesDir)) {
+  console.error(`Missing ${path.relative(root, resourcesDir)} — sync-adapter-resources failed`);
+  process.exit(1);
+}
+const bootResource = path.join(resourcesDir, 'adminapi-boot.ts');
+if (!fs.existsSync(bootResource)) {
+  console.error(`Missing ${path.relative(root, bootResource)} — sync-adapter-resources failed`);
   process.exit(1);
 }
 

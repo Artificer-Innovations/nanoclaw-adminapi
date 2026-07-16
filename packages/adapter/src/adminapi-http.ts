@@ -2,7 +2,11 @@
  * Pure HTTP router for the admin API. Host-coupled group logic is injected
  * via GroupsBackend so this module stays unit-testable without NanoClaw.
  */
+import { timingSafeEqual } from 'node:crypto';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+
+/** Max request body accepted before we reject with 413 (memory-DoS guard). */
+export const MAX_BODY_BYTES = 1024 * 1024;
 
 export interface GroupRecord {
   id: string;
@@ -14,10 +18,16 @@ export interface GroupRecord {
   [key: string]: unknown;
 }
 
+/** Result of a create call: `created` distinguishes fresh vs idempotent reuse. */
+export interface CreateResult {
+  group: GroupRecord;
+  created: boolean;
+}
+
 export interface GroupsBackend {
   list(): Promise<GroupRecord[]>;
   get(id: string): Promise<GroupRecord | null>;
-  create(body: { name: string; folder: string; template?: string }): Promise<GroupRecord>;
+  create(body: { name: string; folder: string; template?: string }): Promise<CreateResult>;
   update(id: string, body: { name: string }): Promise<GroupRecord>;
   delete(id: string): Promise<unknown>;
   getConfig(id: string): Promise<Record<string, unknown> | null>;
@@ -29,6 +39,8 @@ export interface AdminHttpOptions {
   token: string;
   basePath: string;
   backend: GroupsBackend;
+  /** When true, `GET /health` is served before auth (unauthenticated liveness). */
+  healthPublic?: boolean;
 }
 
 export class AdminHttpError extends Error {
@@ -43,7 +55,9 @@ export class AdminHttpError extends Error {
 }
 
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
-  const payload = JSON.stringify(body);
+  // JSON.stringify(undefined) returns undefined; coerce so Buffer.byteLength
+  // never throws and responses are always valid JSON (e.g. void DELETE/restart).
+  const payload = JSON.stringify(body ?? null);
   res.writeHead(status, {
     'Content-Type': 'application/json; charset=utf-8',
     'Content-Length': Buffer.byteLength(payload),
@@ -62,10 +76,29 @@ function extractBearer(req: IncomingMessage): string | null {
   return match?.[1]?.trim() || null;
 }
 
+/**
+ * Constant-time bearer check. The token is root-equivalent for agent
+ * lifecycle, so avoid `!==` which short-circuits and leaks length/prefix
+ * timing that an attacker could use to reconstruct the secret.
+ */
+function tokenValid(provided: string, expected: string): boolean {
+  if (!provided || !expected) return false;
+  const a = Buffer.from(provided);
+  const b = Buffer.from(expected);
+  if (a.length !== b.length) return false;
+  return timingSafeEqual(a, b);
+}
+
 async function readJsonBody(req: IncomingMessage): Promise<unknown> {
   const chunks: Buffer[] = [];
+  let total = 0;
   for await (const chunk of req) {
-    chunks.push(typeof chunk === 'string' ? Buffer.from(chunk) : chunk);
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk) : chunk;
+    total += buf.byteLength;
+    if (total > MAX_BODY_BYTES) {
+      throw new AdminHttpError(413, 'payload_too_large', 'Request body exceeds 1 MB');
+    }
+    chunks.push(buf);
   }
   if (chunks.length === 0) return {};
   const raw = Buffer.concat(chunks).toString('utf8').trim();
@@ -116,8 +149,15 @@ export async function handleAdminRequest(
       return;
     }
 
+    // Optional unauthenticated liveness so reverse-proxy/LB probes don't need
+    // the root-equivalent token. Opt-in via ADMINAPI_HEALTH_PUBLIC.
+    if (opts.healthPublic && method === 'GET' && rel === '/health') {
+      sendJson(res, 200, { ok: true });
+      return;
+    }
+
     const bearer = extractBearer(req);
-    if (!bearer || bearer !== opts.token) {
+    if (!bearer || !tokenValid(bearer, opts.token)) {
       sendError(res, 401, 'unauthorized', 'Missing or invalid bearer token');
       return;
     }
@@ -138,8 +178,9 @@ export async function handleAdminRequest(
       const name = requireString(body, 'name');
       const folder = requireString(body, 'folder');
       const template = typeof body.template === 'string' ? body.template.trim() : undefined;
-      const created = await opts.backend.create({ name, folder, template: template || undefined });
-      sendJson(res, 201, created);
+      const result = await opts.backend.create({ name, folder, template: template || undefined });
+      // 201 only when a resource was actually created; idempotent folder reuse → 200.
+      sendJson(res, result.created ? 201 : 200, result.group);
       return;
     }
 
@@ -198,7 +239,9 @@ export async function handleAdminRequest(
     }
 
     if ((rest === '/restart' || rest === '/restart/') && method === 'POST') {
-      const body = asRecord(await readJsonBody(req).catch(() => ({})));
+      // Parse like every other endpoint: malformed JSON → 400 (an empty body
+      // is already treated as {}), rather than being silently swallowed.
+      const body = asRecord(await readJsonBody(req));
       const rebuild = body.rebuild === true || body.rebuild === 'true';
       const result = await opts.backend.restart(id, { rebuild });
       sendJson(res, 200, result);
@@ -207,20 +250,15 @@ export async function handleAdminRequest(
 
     sendError(res, 404, 'not_found', 'Not found');
   } catch (err) {
+    // Known conditions carry an explicit status/code (including typed errors
+    // the backend raises by mapping ncl error codes). Everything else is an
+    // unexpected failure: log the detail server-side, return a generic message
+    // so internal DB/constraint strings never leak to the caller.
     if (err instanceof AdminHttpError) {
       sendError(res, err.status, err.code, err.message);
       return;
     }
-    const message = err instanceof Error ? err.message : String(err);
-    const lower = message.toLowerCase();
-    if (lower.includes('not found')) {
-      sendError(res, 404, 'not_found', message);
-      return;
-    }
-    if (lower.includes('already exists') || lower.includes('unique') || lower.includes('duplicate')) {
-      sendError(res, 409, 'conflict', message);
-      return;
-    }
-    sendError(res, 500, 'internal_error', message);
+    console.error('[adminapi] unhandled request error', err);
+    sendError(res, 500, 'internal_error', 'Internal server error');
   }
 }

@@ -110,8 +110,10 @@ export function printInstallNextSteps(result: InstallResult): void {
     console.log(`Added .env: ${result.env.created.join(', ')}`);
   }
   console.log('\nNext steps:');
-  console.log('  pnpm run build');
-  console.log('  pnpm exec nanoclaw-adminapi verify');
-  console.log('  # restart your NanoClaw host service');
-  console.log('  curl -H "Authorization: Bearer $ADMINAPI_TOKEN" http://127.0.0.1:3210/internal/admin/health');
+  console.log('  1. Review .env — the API ships DISABLED (ADMINAPI_ENABLED=false, fail-closed).');
+  console.log('     Set ADMINAPI_ENABLED=true only after checking your network exposure and token.');
+  console.log('  2. pnpm run build');
+  console.log('  3. pnpm exec nanoclaw-adminapi verify');
+  console.log('  4. # restart your NanoClaw host service');
+  console.log('  5. curl -H "Authorization: Bearer $ADMINAPI_TOKEN" http://127.0.0.1:3210/internal/admin/health');
 }

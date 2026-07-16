@@ -1,9 +1,11 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { assertConfigReady, resolveAdminApiConfig } from './adminapi-config.js';
 import {
   AdminHttpError,
   handleAdminRequest,
+  MAX_BODY_BYTES,
   stripBasePath,
+  type CreateResult,
   type GroupsBackend,
   type GroupRecord,
 } from './adminapi-http.js';
@@ -38,9 +40,11 @@ function mockReq(opts: {
   url?: string;
   authorization?: string;
   body?: unknown;
+  rawChunks?: Buffer[];
 }): IncomingMessage {
-  const payload = opts.body === undefined ? null : Buffer.from(JSON.stringify(opts.body));
-  let consumed = false;
+  const chunks =
+    opts.rawChunks ??
+    (opts.body === undefined ? [] : [Buffer.from(JSON.stringify(opts.body))]);
   const req = {
     method: opts.method ?? 'GET',
     url: opts.url ?? '/',
@@ -48,10 +52,7 @@ function mockReq(opts: {
       authorization: opts.authorization,
     },
     async *[Symbol.asyncIterator]() {
-      if (payload && !consumed) {
-        consumed = true;
-        yield payload;
-      }
+      for (const chunk of chunks) yield chunk;
     },
   } as unknown as IncomingMessage;
   return req;
@@ -66,11 +67,11 @@ function memoryBackend(seed: GroupRecord[] = []): GroupsBackend {
     async get(id) {
       return groups.get(id) ?? null;
     },
-    async create(body) {
+    async create(body): Promise<CreateResult> {
       for (const g of groups.values()) {
-        if (g.folder === body.folder) return { ...g, warnings: [] };
+        if (g.folder === body.folder) return { group: { ...g, warnings: [] }, created: false };
       }
-      const created: GroupRecord = {
+      const group: GroupRecord = {
         id: `ag-${groups.size + 1}`,
         name: body.name,
         folder: body.folder,
@@ -78,8 +79,8 @@ function memoryBackend(seed: GroupRecord[] = []): GroupsBackend {
         config: null,
         warnings: [],
       };
-      groups.set(created.id, created);
-      return created;
+      groups.set(group.id, group);
+      return { group, created: true };
     },
     async update(id, body) {
       const g = groups.get(id);
@@ -134,8 +135,16 @@ describe('resolveAdminApiConfig', () => {
         bind: '127.0.0.1',
         port: 3210,
         basePath: '/internal/admin',
+        healthPublic: false,
       }),
     ).toThrow(/ADMINAPI_TOKEN/);
+  });
+
+  it('reads ADMINAPI_HEALTH_PUBLIC opt-in', () => {
+    expect(resolveAdminApiConfig({}, {}).healthPublic).toBe(false);
+    expect(
+      resolveAdminApiConfig({ ADMINAPI_HEALTH_PUBLIC: 'true' }, {}).healthPublic,
+    ).toBe(true);
   });
 });
 
@@ -217,8 +226,28 @@ describe('handleAdminRequest', () => {
     expect(out.json.error).toBe('immutable_folder');
   });
 
-  it('maps not-found backend errors to 404', async () => {
+  it('returns 200 (not 201) on idempotent folder reuse', async () => {
+    const backend = memoryBackend([{ id: 'ag-1', name: 'A', folder: 'a', warnings: [] }]);
+    const out = mockRes();
+    await handleAdminRequest(
+      mockReq({
+        method: 'POST',
+        url: '/internal/admin/groups',
+        authorization: `Bearer ${token}`,
+        body: { name: 'A', folder: 'a' },
+      }),
+      out.res,
+      { token, basePath: '/internal/admin', backend },
+    );
+    expect(out.status).toBe(200);
+    expect(out.json.folder).toBe('a');
+  });
+
+  it('maps typed AdminHttpError from backend to its status', async () => {
     const backend = memoryBackend();
+    backend.delete = async () => {
+      throw new AdminHttpError(404, 'not_found', 'group not found: missing');
+    };
     const out = mockRes();
     await handleAdminRequest(
       mockReq({
@@ -230,6 +259,76 @@ describe('handleAdminRequest', () => {
       { token, basePath: '/internal/admin', backend },
     );
     expect(out.status).toBe(404);
+  });
+
+  it('returns generic 500 without leaking backend error detail', async () => {
+    const backend = memoryBackend();
+    backend.list = async () => {
+      throw new Error('SQLITE_CONSTRAINT: agent_groups.folder internal detail');
+    };
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const out = mockRes();
+    await handleAdminRequest(
+      mockReq({ url: '/internal/admin/groups', authorization: `Bearer ${token}` }),
+      out.res,
+      { token, basePath: '/internal/admin', backend },
+    );
+    expect(out.status).toBe(500);
+    expect(out.json.error).toBe('internal_error');
+    expect(out.json.message).toBe('Internal server error');
+    expect(JSON.stringify(out.json)).not.toContain('SQLITE');
+    errSpy.mockRestore();
+  });
+
+  it('rejects oversized request bodies with 413', async () => {
+    const backend = memoryBackend();
+    const chunk = Buffer.alloc(256 * 1024, 0x61);
+    const rawChunks = [chunk, chunk, chunk, chunk, chunk]; // > 1 MB
+    const out = mockRes();
+    await handleAdminRequest(
+      mockReq({
+        method: 'POST',
+        url: '/internal/admin/groups',
+        authorization: `Bearer ${token}`,
+        rawChunks,
+      }),
+      out.res,
+      { token, basePath: '/internal/admin', backend },
+    );
+    expect(out.status).toBe(413);
+    expect(out.json.error).toBe('payload_too_large');
+  });
+
+  it('rejects malformed JSON on restart with 400', async () => {
+    const backend = memoryBackend([{ id: 'ag-1', name: 'A', folder: 'a', warnings: [] }]);
+    const out = mockRes();
+    await handleAdminRequest(
+      mockReq({
+        method: 'POST',
+        url: '/internal/admin/groups/ag-1/restart',
+        authorization: `Bearer ${token}`,
+        rawChunks: [Buffer.from('{not json')],
+      }),
+      out.res,
+      { token, basePath: '/internal/admin', backend },
+    );
+    expect(out.status).toBe(400);
+    expect(out.json.error).toBe('invalid_json');
+  });
+
+  it('serves public health without a token when healthPublic', async () => {
+    const out = mockRes();
+    await handleAdminRequest(
+      mockReq({ url: '/internal/admin/health' }),
+      out.res,
+      { token, basePath: '/internal/admin', backend: memoryBackend(), healthPublic: true },
+    );
+    expect(out.status).toBe(200);
+    expect(out.json.ok).toBe(true);
+  });
+
+  it('MAX_BODY_BYTES is 1 MB', () => {
+    expect(MAX_BODY_BYTES).toBe(1024 * 1024);
   });
 
   it('returns 404 for unknown paths under base', async () => {

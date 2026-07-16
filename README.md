@@ -23,11 +23,12 @@ See [QUICKSTART.md](QUICKSTART.md).
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `ADMINAPI_ENABLED` | `false` | Master switch |
-| `ADMINAPI_TOKEN` | _(required if enabled)_ | Bearer secret |
+| `ADMINAPI_ENABLED` | `false` | Master switch (install scaffolds `false` — fail closed) |
+| `ADMINAPI_TOKEN` | _(required if enabled)_ | Bearer secret (constant-time compared) |
 | `ADMINAPI_BIND` | `127.0.0.1` | Listen address |
 | `ADMINAPI_PORT` | `3210` | Standalone listener port |
 | `ADMINAPI_BASE_PATH` | `/internal/admin` | URL prefix |
+| `ADMINAPI_HEALTH_PUBLIC` | `false` | Serve `GET /health` unauthenticated (LB/proxy probes) |
 
 ## API sketch
 

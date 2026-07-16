@@ -6,10 +6,11 @@ Normative REST contract for `nanoclaw-adminapi` v0.1.
 
 - Header: `Authorization: Bearer <token>`
 - Env: `ADMINAPI_TOKEN` or `NANOCLAW_ADMINAPI_TOKEN`
+- The token is compared in constant time (`crypto.timingSafeEqual`)
 - Missing/wrong token → `401` with `{ "error": "unauthorized", "message": "..." }`
 - When `ADMINAPI_ENABLED` is truthy and token is unset, the API **refuses to start**
 
-All endpoints under the base path (including `/health`) require a valid bearer token.
+All endpoints under the base path require a valid bearer token, except `GET /health` when `ADMINAPI_HEALTH_PUBLIC=true` (see below).
 
 ## Base path
 
@@ -18,19 +19,29 @@ Override: `ADMINAPI_BASE_PATH`
 
 Standalone listener defaults: bind `127.0.0.1`, port `3210` (`ADMINAPI_BIND`, `ADMINAPI_PORT`).
 
+## Limits
+
+- Request bodies larger than **1 MB** are rejected with `413 payload_too_large`.
+- Idle/slow connections are dropped after a 30s request timeout.
+
 ## Error shape
 
 ```json
 { "error": "machine_code", "message": "human readable" }
 ```
 
-Common statuses: `400`, `401`, `404`, `409`, `500`.
+Common statuses: `400`, `401`, `404`, `409`, `413`, `500`.
+
+`500` responses always return a generic `{ "error": "internal_error", "message": "Internal server error" }`; the underlying detail is logged host-side and never sent to the caller.
 
 ## Endpoints
 
 ### `GET /health`
 
-Liveness. Token required.
+Liveness.
+
+- Default: token required (same as every other route).
+- With `ADMINAPI_HEALTH_PUBLIC=true`: served unauthenticated (200-only), so reverse-proxy/LB probes don't need the root-equivalent token.
 
 ```json
 { "ok": true }
@@ -76,11 +87,16 @@ Request:
 ```
 
 - `name` and `folder` required
-- If a group with the same `folder` already exists, returns that group (after ensuring filesystem/config init) with `200`/`201` semantics as implemented (`201` on create path)
+- **`201 Created`** when a new group is created
+- **`200 OK`** when a group with the same `folder` already exists (idempotent reuse) — the existing group is returned after ensuring filesystem/config init
 - Always runs `initGroupFilesystem` after create/reuse
 - `folder` is immutable after create
 
-Response includes `warnings` (array; may be empty). v1 may include `wiring_sync_skipped` when webchat sync is not available.
+**Concurrency:** two simultaneous creates for the same new `folder` race between the existence check and the underlying create. The loser detects the winner's row and returns it as idempotent reuse (`200`) rather than erroring; callers may still retry safely.
+
+**Recreate warning:** `DELETE` is DB-cascade only, so `groups/<folder>/` survives on disk. Creating a group on a folder whose directory still exists (e.g. after deleting the previous group) makes the new group inherit the old `CLAUDE.local.md` / memory. The response `warnings` array includes `folder_reused_with_existing_data` in that case. Remove the on-disk directory first if you want a clean group.
+
+Response includes `warnings` (array; may be empty).
 
 ### `PATCH /groups/:id`
 

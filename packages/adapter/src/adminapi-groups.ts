@@ -4,12 +4,44 @@
  * plus folder-idempotent create + initGroupFilesystem.
  */
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs';
+import path from 'node:path';
 import { dispatch } from './cli/dispatch.js';
+import type { ErrorCode } from './cli/frame.js';
+import { GROUPS_DIR } from './config.js';
 import { getAgentGroup, getAgentGroupByFolder } from './db/agent-groups.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { initGroupFilesystem } from './group-init.js';
-import type { GroupRecord, GroupsBackend } from './adminapi-http.js';
+import { AdminHttpError, type CreateResult, type GroupRecord, type GroupsBackend } from './adminapi-http.js';
 
+/** Map an ncl dispatch error code to an HTTP-facing status/code. */
+function mapDispatchError(code: ErrorCode, message: string): Error {
+  switch (code) {
+    case 'not-found':
+      return new AdminHttpError(404, 'not_found', message);
+    case 'invalid-args':
+      return new AdminHttpError(400, 'validation_error', message);
+    case 'forbidden':
+    case 'permission-denied':
+      return new AdminHttpError(403, 'forbidden', message);
+    default:
+      // unknown-command / handler-error / transport-error / approval-pending →
+      // unexpected for a host caller; surface as a generic 500 (router logs it).
+      return new Error(message);
+  }
+}
+
+/** True when `groups/<folder>/` already exists on disk (e.g. left by a prior DB-only delete). */
+function folderExistsOnDisk(folder: string): boolean {
+  try {
+    return fs.existsSync(path.resolve(GROUPS_DIR, folder));
+  } catch {
+    return false;
+  }
+}
+
+// getContainerConfig is synchronous today; presentGroup relies on that so it
+// can stay non-async. If it ever becomes async, presentGroup must follow.
 function configSummary(agentGroupId: string): Record<string, unknown> | null {
   const row = getContainerConfig(agentGroupId);
   if (!row) return null;
@@ -49,9 +81,13 @@ async function dispatchHost(command: string, args: Record<string, unknown> = {})
   );
   if (!frame.ok) {
     const message = frame.error?.message || `command failed: ${command}`;
-    throw new Error(message);
+    throw mapDispatchError(frame.error?.code ?? 'handler-error', message);
   }
   return frame.data;
+}
+
+function isNotFound(err: unknown): boolean {
+  return err instanceof AdminHttpError && err.status === 404;
 }
 
 export function createHostGroupsBackend(): GroupsBackend {
@@ -76,18 +112,24 @@ export function createHostGroupsBackend(): GroupsBackend {
         };
         return presentGroup(data);
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.toLowerCase().includes('not found')) return null;
+        if (isNotFound(err)) return null;
         throw err;
       }
     },
 
-    async create(body) {
+    async create(body): Promise<CreateResult> {
+      // Idempotent reuse of an existing DB row is benign — the group already
+      // owns its filesystem.
       const existing = getAgentGroupByFolder(body.folder);
       if (existing) {
         initGroupFilesystem(existing);
-        return presentGroup(existing, []);
+        return { group: presentGroup(existing, []), created: false };
       }
+
+      // No DB row yet. If `groups/<folder>/` still exists on disk (DELETE is
+      // DB-cascade only) the new group would inherit the old CLAUDE.local.md /
+      // memory. We surface that via a warning rather than silently adopting it.
+      const staleData = folderExistsOnDisk(body.folder);
 
       const args: Record<string, unknown> = {
         name: body.name,
@@ -95,17 +137,25 @@ export function createHostGroupsBackend(): GroupsBackend {
       };
       if (body.template) args.template = body.template;
 
-      const created = (await dispatchHost('groups-create', args)) as {
-        id: string;
-        name: string;
-        folder: string;
-        created_at?: string;
-      };
+      let created: { id: string; name: string; folder: string; created_at?: string };
+      try {
+        created = (await dispatchHost('groups-create', args)) as typeof created;
+      } catch (err) {
+        // TOCTOU: a concurrent create won the race between our folder check and
+        // dispatch. Treat as idempotent reuse instead of a spurious 409/500.
+        const raced = getAgentGroupByFolder(body.folder);
+        if (raced) {
+          initGroupFilesystem(raced);
+          return { group: presentGroup(raced, []), created: false };
+        }
+        throw err;
+      }
 
       const group = getAgentGroup(created.id) ?? getAgentGroupByFolder(body.folder) ?? created;
       initGroupFilesystem(group as Parameters<typeof initGroupFilesystem>[0]);
       const refreshed = getAgentGroup(group.id) ?? group;
-      return presentGroup(refreshed as typeof created, []);
+      const warnings = staleData ? ['folder_reused_with_existing_data'] : [];
+      return { group: presentGroup(refreshed as typeof created, warnings), created: true };
     },
 
     async update(id, body) {
@@ -126,8 +176,7 @@ export function createHostGroupsBackend(): GroupsBackend {
       try {
         return (await dispatchHost('groups-config-get', { id })) as Record<string, unknown>;
       } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        if (message.toLowerCase().includes('not found')) return null;
+        if (isNotFound(err)) return null;
         throw err;
       }
     },
