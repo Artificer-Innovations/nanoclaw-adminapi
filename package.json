@@ -1,6 +1,6 @@
 {
   "name": "nanoclaw-adminapi",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Token-authenticated HTTP admin API for NanoClaw agent groups",
   "type": "module",
   "license": "MIT",
