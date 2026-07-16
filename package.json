@@ -1,0 +1,61 @@
+{
+  "name": "nanoclaw-adminapi",
+  "version": "0.1.0",
+  "description": "Token-authenticated HTTP admin API for NanoClaw agent groups",
+  "type": "module",
+  "license": "MIT",
+  "author": "Artificer Innovations, LLC",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Artificer-Innovations/nanoclaw-adminapi"
+  },
+  "homepage": "https://github.com/Artificer-Innovations/nanoclaw-adminapi",
+  "bugs": {
+    "url": "https://github.com/Artificer-Innovations/nanoclaw-adminapi/issues"
+  },
+  "keywords": [
+    "nanoclaw",
+    "ai-agent",
+    "admin-api",
+    "http"
+  ],
+  "bin": {
+    "nanoclaw-adminapi": "./dist/cli/bin.js"
+  },
+  "files": [
+    "dist",
+    "skills",
+    "api-contract.md",
+    "README.md",
+    "QUICKSTART.md",
+    "SECURITY.md",
+    "CHANGELOG.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "pnpm --filter @nanoclaw-adminapi/cli build && node scripts/sync-adapter-resources.mjs && node scripts/verify-publish-entry.mjs",
+    "typecheck": "pnpm -r typecheck",
+    "test:unit": "pnpm -r test:unit",
+    "test:coverage": "pnpm -r test:coverage",
+    "test:integration": "node scripts/run-integration.mjs",
+    "changeset": "changeset",
+    "version": "changeset version",
+    "release:publish": "npm publish --provenance --access public",
+    "prepublishOnly": "pnpm run build"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public",
+    "provenance": true
+  },
+  "devDependencies": {
+    "@changesets/changelog-github": "^0.5.1",
+    "@changesets/cli": "^2.29.4",
+    "@types/node": "^22.15.30",
+    "typescript": "^5.8.3",
+    "vitest": "^4.1.9"
+  },
+  "packageManager": "pnpm@9.15.0"
+}

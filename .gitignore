@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+*.log
+.DS_Store
+skills/add-adminapi/resources/
+.turbo/
+*.tsbuildinfo

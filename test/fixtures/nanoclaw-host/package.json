@@ -1,0 +1,8 @@
+{
+  "name": "nanoclaw-host-fixture",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "echo ok"
+  }
+}
