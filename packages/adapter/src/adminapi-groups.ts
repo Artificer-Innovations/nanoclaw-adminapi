@@ -7,29 +7,17 @@ import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { dispatch } from './cli/dispatch.js';
-import type { ErrorCode } from './cli/frame.js';
 import { GROUPS_DIR } from './config.js';
 import { getAgentGroup, getAgentGroupByFolder } from './db/agent-groups.js';
 import { getContainerConfig } from './db/container-configs.js';
 import { initGroupFilesystem } from './group-init.js';
-import { AdminHttpError, type CreateResult, type GroupRecord, type GroupsBackend } from './adminapi-http.js';
-
-/** Map an ncl dispatch error code to an HTTP-facing status/code. */
-function mapDispatchError(code: ErrorCode, message: string): Error {
-  switch (code) {
-    case 'not-found':
-      return new AdminHttpError(404, 'not_found', message);
-    case 'invalid-args':
-      return new AdminHttpError(400, 'validation_error', message);
-    case 'forbidden':
-    case 'permission-denied':
-      return new AdminHttpError(403, 'forbidden', message);
-    default:
-      // unknown-command / handler-error / transport-error / approval-pending →
-      // unexpected for a host caller; surface as a generic 500 (router logs it).
-      return new Error(message);
-  }
-}
+import {
+  AdminHttpError,
+  mapDispatchError,
+  type CreateResult,
+  type GroupRecord,
+  type GroupsBackend,
+} from './adminapi-http.js';
 
 /** True when `groups/<folder>/` already exists on disk (e.g. left by a prior DB-only delete). */
 function folderExistsOnDisk(folder: string): boolean {
