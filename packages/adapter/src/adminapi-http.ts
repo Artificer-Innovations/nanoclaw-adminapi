@@ -54,6 +54,47 @@ export class AdminHttpError extends Error {
   }
 }
 
+/**
+ * Error codes emitted by host ncl dispatch (`src/cli/frame.ts` in NanoClaw).
+ * Mirrored here so this repo can typecheck and unit-test `mapDispatchError`
+ * without the host sources; when the copied adapter compiles inside a host,
+ * passing the host's real `ErrorCode` into `mapDispatchError` re-validates
+ * that this union is still a superset of the host's.
+ */
+export type NclErrorCode =
+  | 'unknown-command'
+  | 'invalid-args'
+  | 'forbidden'
+  | 'approval-pending'
+  | 'handler-error'
+  | 'transport-error';
+
+/**
+ * Map an ncl dispatch error to an HTTP-facing error.
+ * The host has no dedicated not-found code: missing resources arrive as
+ * `handler-error` with a "<resource> not found: <id>" message (thrown by the
+ * host's `src/cli/crud.ts` handlers, wrapped by `src/cli/dispatch.ts`), so
+ * the 404 mapping keys off that message text. If the host ever rewords those
+ * messages, the unit tests here pin the expected shape.
+ */
+export function mapDispatchError(code: NclErrorCode, message: string): Error {
+  switch (code) {
+    case 'invalid-args':
+      return new AdminHttpError(400, 'validation_error', message);
+    case 'forbidden':
+      return new AdminHttpError(403, 'forbidden', message);
+    case 'handler-error':
+      if (/not found/i.test(message)) {
+        return new AdminHttpError(404, 'not_found', message);
+      }
+      return new Error(message);
+    default:
+      // unknown-command / transport-error / approval-pending → unexpected for
+      // a host caller; surface as a generic 500 (router logs it).
+      return new Error(message);
+  }
+}
+
 function sendJson(res: ServerResponse, status: number, body: unknown): void {
   // JSON.stringify(undefined) returns undefined; coerce so Buffer.byteLength
   // never throws and responses are always valid JSON (e.g. void DELETE/restart).
