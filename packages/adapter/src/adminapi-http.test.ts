@@ -3,6 +3,7 @@ import { assertConfigReady, resolveAdminApiConfig } from './adminapi-config.js';
 import {
   AdminHttpError,
   handleAdminRequest,
+  mapDispatchError,
   MAX_BODY_BYTES,
   stripBasePath,
   type CreateResult,
@@ -107,6 +108,41 @@ function memoryBackend(seed: GroupRecord[] = []): GroupsBackend {
     },
   };
 }
+
+describe('mapDispatchError', () => {
+  it('maps handler-error with a "not found" message to 404', () => {
+    // Pins the host contract: crud.ts throws "<resource> not found: <id>",
+    // dispatch.ts wraps it as handler-error. If the host rewords this,
+    // group get/config misses silently regress to 500.
+    const err = mapDispatchError('handler-error', 'agent group not found: ag-1');
+    expect(err).toBeInstanceOf(AdminHttpError);
+    expect((err as AdminHttpError).status).toBe(404);
+    expect((err as AdminHttpError).code).toBe('not_found');
+  });
+
+  it('leaves other handler-error messages as generic 500 errors', () => {
+    const err = mapDispatchError('handler-error', 'db is on fire');
+    expect(err).not.toBeInstanceOf(AdminHttpError);
+    expect(err.message).toBe('db is on fire');
+  });
+
+  it('maps invalid-args to 400 and forbidden to 403', () => {
+    const bad = mapDispatchError('invalid-args', 'name is required') as AdminHttpError;
+    expect(bad.status).toBe(400);
+    expect(bad.code).toBe('validation_error');
+
+    const denied = mapDispatchError('forbidden', 'host only') as AdminHttpError;
+    expect(denied.status).toBe(403);
+    expect(denied.code).toBe('forbidden');
+  });
+
+  it('maps remaining codes to generic errors', () => {
+    for (const code of ['unknown-command', 'transport-error', 'approval-pending'] as const) {
+      const err = mapDispatchError(code, 'boom');
+      expect(err).not.toBeInstanceOf(AdminHttpError);
+    }
+  });
+});
 
 describe('resolveAdminApiConfig', () => {
   it('defaults to disabled localhost:3210', () => {
