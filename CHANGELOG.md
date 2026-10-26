@@ -1,4 +1,11 @@
-# Changelog
+# nanoclaw-adminapi
+
+## 0.1.3
+
+### Patch Changes
+
+- Release line aligned with NanoClaw 2026.10.1-rc.2 package matrix.
+
 
 ## 0.1.2
 
